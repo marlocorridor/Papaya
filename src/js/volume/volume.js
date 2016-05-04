@@ -117,18 +117,16 @@ papaya.volume.Volume.prototype.readURLs = function (urls, callback) {
     this.compressed = this.fileIsCompressed(this.fileName);
 
     var self = this;
+    this.loadedFileCount = 0;
     this.rawData = [];
     this.readEachURL(this)
-        .done(function (vol) {
-            console.log(arguments,this); 
-            setTimeout(function () {self.decompress(vol); }, 0);
+        .done(function () {
+            // recieves `arguments` which are results off xhr requests
+            setTimeout(function () {self.decompress(self); }, 0);
         })
         .fail(function (vol, err, xhr) {
-            console.log(arguments);
-            var message;
 
-            message = err.message || '';
-
+            var message = err.message || '';
             // if error came from ajax request
             if ( typeof xhr !== "undefined" ) {
                 message = "Response status = " + xhr.status;
@@ -143,11 +141,13 @@ papaya.volume.Volume.prototype.readURLs = function (urls, callback) {
 
 
 papaya.volume.Volume.prototype.loadURL = function (url, vol) {
-    var dfd = jQuery.Deferred();
+    var xhr, progPerc, deferredLoading, progressText;
+
+    deferredLoading = jQuery.Deferred();
 
     supported = typeof new XMLHttpRequest().responseType === 'string';
     if (supported) {
-        xhr = jQuery.ajax(url);
+        xhr = new XMLHttpRequest();
         xhr.open('GET', url, true);
         xhr.responseType = 'arraybuffer';
 
@@ -155,16 +155,16 @@ papaya.volume.Volume.prototype.loadURL = function (url, vol) {
             if (xhr.readyState === 4) {
                 if (xhr.status === 200) {
                     vol.fileLength = vol.rawData.byteLength;
-                    dfd.resolve( xhr.response );
+                    deferredLoading.resolve( xhr.response );
                 } else {
-                    dfd.reject(vol,false,xhr);
+                    deferredLoading.reject(vol,false,xhr);
                 }
             }
         };
 
         xhr.onprogress = function (evt) {
             if(evt.lengthComputable) {
-                dfd.notify(evt.loaded, evt.total);
+                deferredLoading.notify(evt.loaded, evt.total);
             }
         };
 
@@ -175,26 +175,30 @@ papaya.volume.Volume.prototype.loadURL = function (url, vol) {
         vol.finishedLoad();
     }
 
-    return dfd.promise();
+    var promise = deferredLoading
+        .promise()
+        .done(function (file) {
+            vol.loadedFileCount++;
+            vol.rawData.push(file);
+        })
+        .fail(function (vol, err, xhr) {
+            console.error(vol, err, xhr);
+        })
+        .progress(function (loaded,total) {
+            progPerc     = parseInt(100 * (vol.loadedFileCount) / vol.urls.length, 10);
+            progressText = papaya.volume.Volume.PROGRESS_LABEL_LOADING + ' image ' + (vol.loadedFileCount + 1) + ' of ' + vol.urls.length + ' (' + progPerc + '%)';
+            vol.progressMeter.drawProgress(loaded / total, progressText);
+        });
+
+    return promise;
 };
 
 papaya.volume.Volume.prototype.readEachURL = function (vol, index) {
-    var supported, xhr, progPerc, loadAllURL, deferredLoads;
 
-    loadAllURL    = jQuery.Deferred();
-    deferredLoads = [];
-
+    // create deferred array
+    var deferredLoads = [];
     for (var i = 0; i < vol.urls.length; i++) {
-        var getFileDeferred = vol.loadURL( vol.urls[i], vol )
-            .done(function (file) {
-                vol.rawData[i] = file;
-            })
-            .fail(function (vol, err, xhr) {
-                console.log(vol, err, xhr);
-            })
-            .progress(function (loaded,total,label) {
-                vol.progressMeter.drawProgress(loaded / total, label, papaya.volume.Volume.PROGRESS_LABEL_LOADING);
-            });
+        var getFileDeferred = vol.loadURL( vol.urls[i], vol );
         deferredLoads.push(
             getFileDeferred
         );
